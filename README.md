@@ -6,7 +6,7 @@ https://github.com/user-attachments/assets/d636e603-b723-44ed-b414-094297a561d8
 
 ## Installation
 
-1. Download `sl-camera-addon.py`
+1. Download the zip from releases
 2. In Blender: Edit → Preferences → Add-ons → Install...
 3. Select the downloaded file and click "Install Add-on"
 4. Enable "3D View: Second Life-style camera" in the add-ons list
