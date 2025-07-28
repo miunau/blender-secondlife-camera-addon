@@ -1,0 +1,94 @@
+name: Create Release
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Read version from manifest
+      id: get_version
+      run: |
+        VERSION=$(grep '^version = ' blender_manifest.toml | sed 's/version = "\(.*\)"/\1/')
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Found version: $VERSION"
+    
+    - name: Check if release exists
+      id: check_release
+      run: |
+        VERSION="${{ steps.get_version.outputs.version }}"
+        RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+          -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          "https://api.github.com/repos/${{ github.repository }}/releases/tags/v$VERSION")
+        
+        if [ "$RESPONSE" = "200" ]; then
+          echo "Release v$VERSION already exists"
+          echo "exists=true" >> $GITHUB_OUTPUT
+        else
+          echo "Release v$VERSION does not exist"
+          echo "exists=false" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Create release zip
+      if: steps.check_release.outputs.exists == 'false'
+      run: |
+        VERSION="${{ steps.get_version.outputs.version }}"
+        ZIP_NAME="sl-camera-addon-v$VERSION.zip"
+        
+        # Create zip with addon files
+        zip -r "$ZIP_NAME" \
+          __init__.py \
+          blender_manifest.toml \
+          LICENSE \
+          README.md
+        
+        echo "zip_name=$ZIP_NAME" >> $GITHUB_ENV
+        echo "Created zip: $ZIP_NAME"
+    
+    - name: Create GitHub Release
+      if: steps.check_release.outputs.exists == 'false'
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: v${{ steps.get_version.outputs.version }}
+        release_name: Release v${{ steps.get_version.outputs.version }}
+        body: |
+          ## Second Life-style Camera for Blender v${{ steps.get_version.outputs.version }}
+          
+          ### Installation
+          1. Download the attached zip file
+          2. Extract the contents
+          3. In Blender: Edit → Preferences → Add-ons → Install...
+          4. Select the addon files and enable the addon
+          
+          ### Changes
+          - See commit history for detailed changes
+        draft: false
+        prerelease: false
+      id: create_release
+    
+    - name: Upload Release Asset
+      if: steps.check_release.outputs.exists == 'false'
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./${{ env.zip_name }}
+        asset_name: ${{ env.zip_name }}
+        asset_content_type: application/zip
+    
+    - name: Release already exists
+      if: steps.check_release.outputs.exists == 'true'
+      run: |
+        echo "::warning::Release v${{ steps.get_version.outputs.version }} already exists. Skipping release creation." 
