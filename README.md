@@ -2,6 +2,8 @@
 
 A camera control addon that brings Second Life's intuitive camera system to Blender.
 
+https://github.com/user-attachments/assets/d636e603-b723-44ed-b414-094297a561d8
+
 ## Installation
 
 1. Download `sl-camera-addon.py`
