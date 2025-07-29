@@ -7,7 +7,7 @@ from bpy.props import FloatProperty, BoolProperty
 from bpy.types import AddonPreferences
 
 class SLCameraPreferences(AddonPreferences):
-    bl_idname = __name__
+    bl_idname = __package__
     
     pan_sensitivity: FloatProperty(
         name="Pan Sensitivity",
@@ -190,7 +190,7 @@ class SL_CAMERA_OT_modal(bpy.types.Operator):
         self.initial_cam_pos = None
         
         # Get addon preferences
-        self.prefs = context.preferences.addons[__name__].preferences
+        self.prefs = context.preferences.addons[__package__].preferences
         
         # Setup timer for animation
         self._timer = context.window_manager.event_timer_add(0.016, window=context.window)  # ~60fps
@@ -401,7 +401,6 @@ class SL_CAMERA_OT_modal(bpy.types.Operator):
             
             # Apply smooth distance-based zoom compensation
             # Use a curve that provides fine control when close, normal control when far
-            # This creates a smooth transition instead of an abrupt threshold
             base_factor = self.distance * 0.1
             fine_control_factor = 0.01 + (base_factor - 0.01) * (self.distance / (self.distance + 0.5))
             distance_factor = max(0.01, fine_control_factor)
