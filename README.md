@@ -1,15 +1,14 @@
-# Second Life-style Camera for Blender
+# Second Life-style camera for Blender
 
-A camera control addon that brings Second Life's intuitive camera system to Blender.
+A camera control addon that brings Second Life's view camera system to Blender.
 
 https://github.com/user-attachments/assets/d636e603-b723-44ed-b414-094297a561d8
 
 ## Installation
 
-1. Download the zip from releases
-2. In Blender: Edit → Preferences → Add-ons → Install...
-3. Select the downloaded file and click "Install Add-on"
-4. Enable "3D View: Second Life-style camera" in the add-ons list
+1. [Download the latest release zip](https://github.com/miunau/blender-secondlife-camera-addon/releases)
+2. In Blender: Edit → Preferences → Add-ons
+3. Drag and drop the zip into the addons dialog, or install manually
 
 ## Usage
 
@@ -21,7 +20,13 @@ Hold `Alt` (Option on Mac) and click/drag with left mouse button:
 Add modifiers for different modes:
 
 - **Alt + Ctrl + Drag**: Orbit around focus point (no zoom)
-- **Alt + Ctrl + Shift + Drag**: Pan camera and target together
+- **Alt + Ctrl + Shift + Drag**: Pan camera
+
+You can let go of the modifiers at any point to continuously move your camera towards your target destination.
+
+## Contributions
+
+Feel free to raise issues or PRs.
 
 ## License
 
