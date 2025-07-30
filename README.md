@@ -1,6 +1,6 @@
 # Second Life-style camera for Blender
 
-A camera control addon that brings Second Life's view camera system to Blender.
+A camera control addon that brings Second Life's free-look camera system to Blender.
 
 https://github.com/user-attachments/assets/d636e603-b723-44ed-b414-094297a561d8
 
