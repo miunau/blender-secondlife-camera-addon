@@ -6,6 +6,10 @@ https://github.com/user-attachments/assets/d636e603-b723-44ed-b414-094297a561d8
 
 ## Installation
 
+**Install from the Blender extensions directory: https://extensions.blender.org/add-ons/miunau-slcamera**
+
+Or manually from this repo:
+
 1. [Download the latest release zip](https://github.com/miunau/blender-secondlife-camera-addon/releases)
 2. In Blender: Edit → Preferences → Add-ons
 3. Drag and drop the zip into the addons dialog, or install manually
