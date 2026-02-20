@@ -1,7 +1,7 @@
 import bpy
 import math
 import time
-from mathutils import Vector, Quaternion
+from mathutils import Vector
 from bpy_extras import view3d_utils
 from bpy.props import FloatProperty, BoolProperty
 from bpy.types import AddonPreferences
@@ -130,12 +130,37 @@ class SL_CAMERA_OT_modal(bpy.types.Operator):
     # Timer for animation
     _timer = None
 
+    def _apply_camera_transform(self, context, position, rotation):
+        """Update the scene camera's world transform (used in camera-lock mode)."""
+        camera = context.scene.camera
+        if not camera:
+            return
+        mat = rotation.to_matrix().to_4x4()
+        mat.translation = position
+        camera.matrix_world = mat
+
+    def _get_camera_matrix(self, context):
+        """Return the camera-to-world matrix for the current view."""
+        if self.camera_lock_mode and context.scene.camera:
+            return context.scene.camera.matrix_world.copy()
+        return context.space_data.region_3d.view_matrix.inverted()
+
+    def _direction_to_spherical(self, direction, default_theta=None, default_phi=None):
+        """Update spherical angles from a direction vector."""
+        if direction.length > 0:
+            normalized = direction.normalized()
+            self.theta = math.atan2(normalized.y, normalized.x)
+            self.phi = math.acos(max(-1, min(1, normalized.z)))
+            return
+        if default_theta is not None:
+            self.theta = default_theta
+        if default_phi is not None:
+            self.phi = default_phi
+
     def _update_camera_position(self, context):
-        """Convert spherical coordinates to camera position and update rv3d"""
+        """Convert spherical coordinates to camera position and update the view."""
         if not self.target_point:
             return
-            
-        rv3d = context.space_data.region_3d
         
         # Convert spherical coordinates to Cartesian for Z-up system
         x = self.target_point.x + self.distance * math.sin(self.phi) * math.cos(self.theta)
@@ -148,10 +173,13 @@ class SL_CAMERA_OT_modal(bpy.types.Operator):
         direction = (self.target_point - camera_pos).normalized()
         look_at_rotation = direction.to_track_quat('-Z', 'Y')
         
-        # Update Blender's view state
-        rv3d.view_location = self.target_point
-        rv3d.view_rotation = look_at_rotation
-        rv3d.view_distance = self.distance
+        if self.camera_lock_mode:
+            self._apply_camera_transform(context, camera_pos, look_at_rotation)
+        else:
+            rv3d = context.space_data.region_3d
+            rv3d.view_location = self.target_point
+            rv3d.view_rotation = look_at_rotation
+            rv3d.view_distance = self.distance
 
     def invoke(self, context, event):
         if context.area.type != 'VIEW_3D':
@@ -165,24 +193,25 @@ class SL_CAMERA_OT_modal(bpy.types.Operator):
         
         # Initialize spherical coordinates from current view
         rv3d = context.space_data.region_3d
+        
+        self.camera_lock_mode = (
+            rv3d.view_perspective == 'CAMERA' and
+            context.space_data.lock_camera and
+            context.scene.camera is not None
+        )
+        
         self.target_point = rv3d.view_location.copy()
         self.distance = rv3d.view_distance
         
-        # Calculate current phi and theta from camera position
-        view_mat = rv3d.view_matrix.inverted()
-        cam_pos = view_mat.translation
+        # Calculate current phi and theta from camera position.
+        view_mat = self._get_camera_matrix(context)
+        cam_pos = view_mat.translation.copy()
         direction = cam_pos - self.target_point
-        
-        if direction.length > 0:
-            direction.normalize()
-            # In Blender's Z-up system:
-            # theta is the angle in the XY plane from the X axis
-            self.theta = math.atan2(direction.y, direction.x)
-            # phi is the angle from the positive Z axis
-            self.phi = math.acos(max(-1, min(1, direction.z)))
-        else:
-            self.theta = math.pi / 4
-            self.phi = math.pi / 4
+        self._direction_to_spherical(
+            direction,
+            default_theta=math.pi / 4,
+            default_phi=math.pi / 4,
+        )
         
         # Transition state
         self.start_target = None
@@ -195,16 +224,9 @@ class SL_CAMERA_OT_modal(bpy.types.Operator):
         # Setup timer for animation
         self._timer = context.window_manager.event_timer_add(0.016, window=context.window)  # ~60fps
         
-        # Handle the initial click based on mode and update status based on success
-        if self.mode == 'FOCUS':
-            self._handle_focus_click(context, event)
-            self._update_status_text(context)
-        elif self.mode == 'ORBIT':
-            self._handle_orbit_click(context, event)
-            self._update_status_text(context)
-        elif self.mode == 'PAN':
-            self._handle_pan_click(context, event)
-            self._update_status_text(context)
+        # Handle the initial click based on mode and update status
+        self._handle_click(context, event)
+        self._update_status_text(context)
             
         context.window_manager.modal_handler_add(self)
         return {'RUNNING_MODAL'}
@@ -274,10 +296,16 @@ class SL_CAMERA_OT_modal(bpy.types.Operator):
         if self.target_point is None:
             self.target_point = rv3d.view_location.copy()
             
-        # Store initial state for interpolation
-        self.start_rotation = rv3d.view_rotation.copy()
         self.start_target = self.target_point.copy()
-        self.initial_cam_pos = rv3d.view_matrix.inverted().translation # Store physical camera position
+
+        # In camera-lock mode, read current state from the camera object directly
+        # since rv3d may not reflect our prior writes to matrix_world.
+        view_mat = self._get_camera_matrix(context)
+        self.initial_cam_pos = view_mat.translation.copy()
+        if self.camera_lock_mode and context.scene.camera:
+            self.start_rotation = view_mat.to_quaternion()
+        else:
+            self.start_rotation = rv3d.view_rotation.copy()
 
         # Calculate desired final state
         direction = (target_point - self.initial_cam_pos).normalized()
@@ -304,16 +332,18 @@ class SL_CAMERA_OT_modal(bpy.types.Operator):
         else:
             eased = 1 - pow(-2 * progress + 2, 2) / 2
         
-        rv3d = context.space_data.region_3d
-        
         # Interpolate rotation and target point
         current_rotation = self.start_rotation.slerp(self.end_rotation, eased)
         current_target = self.start_target.lerp(self.end_target, eased)
         
-        # Update view properties to keep camera position fixed
-        rv3d.view_rotation = current_rotation
-        rv3d.view_location = current_target
-        rv3d.view_distance = (self.initial_cam_pos - current_target).length
+        # Update view to keep camera position fixed while rotating toward target
+        if self.camera_lock_mode:
+            self._apply_camera_transform(context, self.initial_cam_pos, current_rotation)
+        else:
+            rv3d = context.space_data.region_3d
+            rv3d.view_rotation = current_rotation
+            rv3d.view_location = current_target
+            rv3d.view_distance = (self.initial_cam_pos - current_target).length
         
         # Check if transition is complete
         if progress >= 1.0:
@@ -323,10 +353,7 @@ class SL_CAMERA_OT_modal(bpy.types.Operator):
             # Recompute spherical coordinates from the final state
             direction = (self.initial_cam_pos - self.target_point)
             self.distance = direction.length
-            if self.distance > 0:
-                direction.normalize()
-                self.theta = math.atan2(direction.y, direction.x)
-                self.phi = math.acos(max(-1, min(1, direction.z)))
+            self._direction_to_spherical(direction)
     
     def _perform_raycast(self, context, event):
         """Helper method to perform raycast and return result and location."""
@@ -348,8 +375,8 @@ class SL_CAMERA_OT_modal(bpy.types.Operator):
         
         return result, location
 
-    def _handle_focus_click(self, context, event):
-        """Handle ALT+Click to focus on an object at exact hit point"""
+    def _handle_target_click(self, context, event):
+        """Handle click to focus/orbit on an object at exact hit point."""
         result, location = self._perform_raycast(context, event)
         
         if result:
@@ -360,18 +387,6 @@ class SL_CAMERA_OT_modal(bpy.types.Operator):
             # If raycast fails, clear the target to stop camera movement
             self.target_point = None
             return False
-    
-    def _handle_orbit_click(self, context, event):
-        """Handle ALT+CTRL+Click to set orbit center"""
-        result, location = self._perform_raycast(context, event)
-        
-        if result:
-            self._start_transition(context, location)
-            context.area.tag_redraw()
-            return True
-        else:
-            self.target_point = None
-            return False
 
     def _handle_pan_click(self, context, event):
         """Handle ALT+CTRL+SHIFT+Click to set pan focus (does not clear target on miss)"""
@@ -379,6 +394,7 @@ class SL_CAMERA_OT_modal(bpy.types.Operator):
         
         if result:
             self._start_transition(context, location)
+            context.area.tag_redraw()
             return True
         # If miss, do nothing and keep the current target_point
         return False
@@ -440,14 +456,13 @@ class SL_CAMERA_OT_modal(bpy.types.Operator):
     
     def _handle_pan_drag(self, context, dx, dy):
         """Handle ALT+CTRL+SHIFT+Drag - pan camera and target together"""
-        rv3d = context.space_data.region_3d
-        
         # Apply axis inversion for pan mode
         pan_dx = dx if self.prefs.invert_horizontal else -dx
         pan_dy = dy if self.prefs.invert_vertical else -dy
         
-        # Get camera's right and up vectors
-        view_mat = rv3d.view_matrix.inverted()
+        # Get camera's right and up vectors. In camera-lock mode, read from the
+        # camera object since rv3d may not reflect our prior matrix_world writes.
+        view_mat = self._get_camera_matrix(context)
         right_vec = view_mat.to_3x3() @ Vector((1, 0, 0))
         up_vec = view_mat.to_3x3() @ Vector((0, 1, 0))
         
@@ -459,9 +474,15 @@ class SL_CAMERA_OT_modal(bpy.types.Operator):
         # Calculate pan vector
         pan_vec = (right_vec * pan_dx + up_vec * pan_dy) * sensitivity
         
-        # Move both camera and target
         self.target_point += pan_vec
-        rv3d.view_location += pan_vec
+        if self.camera_lock_mode:
+            camera = context.scene.camera
+            if camera:
+                mat = camera.matrix_world.copy()
+                mat.translation += pan_vec
+                camera.matrix_world = mat
+        else:
+            context.space_data.region_3d.view_location += pan_vec
 
     def _update_status_text(self, context):
         """Update status text based on current mode and target state."""
@@ -481,12 +502,8 @@ class SL_CAMERA_OT_modal(bpy.types.Operator):
         self.mode = new_mode
         self.is_transitioning = False  # Stop any transitions on mode change
 
-        if new_mode == 'ORBIT':
-            # Ensure we have a target point for orbit mode
-            if not self.target_point:
-                self.target_point = rv3d.view_location.copy()
-        elif new_mode == 'PAN':
-            # Ensure we have a target point for pan mode
+        if new_mode in ('ORBIT', 'PAN'):
+            # Ensure we have a target point for orbit/pan modes
             if not self.target_point:
                 self.target_point = rv3d.view_location.copy()
         
@@ -496,9 +513,9 @@ class SL_CAMERA_OT_modal(bpy.types.Operator):
     def _handle_click(self, context, event):
         """Handles the initial mouse click for any mode."""
         if self.mode == 'FOCUS':
-            self._handle_focus_click(context, event)
+            self._handle_target_click(context, event)
         elif self.mode == 'ORBIT':
-            self._handle_orbit_click(context, event)
+            self._handle_target_click(context, event)
         elif self.mode == 'PAN':
             self._handle_pan_click(context, event)
             
@@ -511,14 +528,15 @@ class SL_CAMERA_OT_modal(bpy.types.Operator):
 
         # If mouse is down, perform the drag action
         if self.mouse_down and (dx != 0 or dy != 0):
-            if self.mode == 'FOCUS':
-                self._handle_focus_drag(context, dx, dy)
-            elif self.mode == 'ORBIT':
-                self._handle_orbit_drag(context, dx, dy)
-            elif self.mode == 'PAN':
-                self._handle_pan_drag(context, dx, dy)
-            
-            context.area.tag_redraw()
+            if not self.is_transitioning:
+                if self.mode == 'FOCUS':
+                    self._handle_focus_drag(context, dx, dy)
+                elif self.mode == 'ORBIT':
+                    self._handle_orbit_drag(context, dx, dy)
+                elif self.mode == 'PAN':
+                    self._handle_pan_drag(context, dx, dy)
+                
+                context.area.tag_redraw()
 
         # Always update the last position for the next delta calculation
         self.last_x = event.mouse_region_x
