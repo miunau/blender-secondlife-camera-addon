@@ -187,9 +187,20 @@ class SL_CAMERA_OT_modal(bpy.types.Operator):
             
         # Use the mode from the property (set by keymap)
         self.mode = self.camera_mode
-        self.mouse_down = True
-        self.last_x = event.mouse_region_x
-        self.last_y = event.mouse_region_y
+
+        # CLICK_DRAG: mouse is held, user is already dragging.
+        # CLICK: mouse was pressed and released without dragging.
+        is_drag = (event.value == 'CLICK_DRAG')
+        self.mouse_down = is_drag
+
+        if is_drag:
+            # Use the original press position for raycast accuracy
+            region = context.region
+            self.last_x = event.mouse_prev_press_x - region.x
+            self.last_y = event.mouse_prev_press_y - region.y
+        else:
+            self.last_x = event.mouse_region_x
+            self.last_y = event.mouse_region_y
         
         # Initialize spherical coordinates from current view
         rv3d = context.space_data.region_3d
@@ -224,8 +235,12 @@ class SL_CAMERA_OT_modal(bpy.types.Operator):
         # Setup timer for animation
         self._timer = context.window_manager.event_timer_add(0.016, window=context.window)  # ~60fps
         
-        # Handle the initial click based on mode and update status
-        self._handle_click(context, event)
+        # Handle the initial click based on mode and update status.
+        # For CLICK_DRAG, raycast from the original press position.
+        if is_drag:
+            self._handle_click(context, event, coord_override=(self.last_x, self.last_y))
+        else:
+            self._handle_click(context, event)
         self._update_status_text(context)
             
         context.window_manager.modal_handler_add(self)
@@ -355,18 +370,26 @@ class SL_CAMERA_OT_modal(bpy.types.Operator):
             self.distance = direction.length
             self._direction_to_spherical(direction)
     
-    def _perform_raycast(self, context, event):
-        """Helper method to perform raycast and return result and location."""
+    def _perform_raycast(self, context, event, coord_override=None):
+        """Helper method to perform raycast and return result and location.
+        
+        :param coord_override: Optional (x, y) region-relative coordinates to
+            raycast from instead of the event's current mouse position.
+        """
         region = context.region
         rv3d = context.space_data.region_3d
         
-        # Unwrap coordinates using modulo for precision after cursor wrapping
-        coord = (
-            event.mouse_region_x % region.width,
-            event.mouse_region_y % region.height
-        )
+        if coord_override is not None:
+            coord = (
+                coord_override[0] % region.width,
+                coord_override[1] % region.height
+            )
+        else:
+            coord = (
+                event.mouse_region_x % region.width,
+                event.mouse_region_y % region.height
+            )
         
-        # Cast ray from mouse position
         view_vec = view3d_utils.region_2d_to_vector_3d(region, rv3d, coord)
         ray_origin = view3d_utils.region_2d_to_origin_3d(region, rv3d, coord)
         
@@ -375,28 +398,26 @@ class SL_CAMERA_OT_modal(bpy.types.Operator):
         
         return result, location
 
-    def _handle_target_click(self, context, event):
+    def _handle_target_click(self, context, event, coord_override=None):
         """Handle click to focus/orbit on an object at exact hit point."""
-        result, location = self._perform_raycast(context, event)
+        result, location = self._perform_raycast(context, event, coord_override)
         
         if result:
             self._start_transition(context, location)
             context.area.tag_redraw()
             return True
         else:
-            # If raycast fails, clear the target to stop camera movement
             self.target_point = None
             return False
 
-    def _handle_pan_click(self, context, event):
+    def _handle_pan_click(self, context, event, coord_override=None):
         """Handle ALT+CTRL+SHIFT+Click to set pan focus (does not clear target on miss)"""
-        result, location = self._perform_raycast(context, event)
+        result, location = self._perform_raycast(context, event, coord_override)
         
         if result:
             self._start_transition(context, location)
             context.area.tag_redraw()
             return True
-        # If miss, do nothing and keep the current target_point
         return False
 
     def _handle_focus_drag(self, context, dx, dy):
@@ -510,14 +531,14 @@ class SL_CAMERA_OT_modal(bpy.types.Operator):
         # Update status text for the new mode
         self._update_status_text(context)
 
-    def _handle_click(self, context, event):
+    def _handle_click(self, context, event, coord_override=None):
         """Handles the initial mouse click for any mode."""
         if self.mode == 'FOCUS':
-            self._handle_target_click(context, event)
+            self._handle_target_click(context, event, coord_override)
         elif self.mode == 'ORBIT':
-            self._handle_target_click(context, event)
+            self._handle_target_click(context, event, coord_override)
         elif self.mode == 'PAN':
-            self._handle_pan_click(context, event)
+            self._handle_pan_click(context, event, coord_override)
             
     def _handle_mouse_move(self, context, event):
         """
@@ -556,7 +577,16 @@ def register():
         kmi = km.keymap_items.new(
             'view3d.sl_camera_modal',
             type='LEFTMOUSE',
-            value='PRESS',
+            value='CLICK_DRAG',
+            alt=True, ctrl=True, shift=True
+        )
+        kmi.properties.camera_mode = 'PAN'
+        addon_keymaps.append((km, kmi))
+
+        kmi = km.keymap_items.new(
+            'view3d.sl_camera_modal',
+            type='LEFTMOUSE',
+            value='CLICK',
             alt=True, ctrl=True, shift=True
         )
         kmi.properties.camera_mode = 'PAN'
@@ -566,7 +596,16 @@ def register():
         kmi = km.keymap_items.new(
             'view3d.sl_camera_modal',
             type='LEFTMOUSE',
-            value='PRESS',
+            value='CLICK_DRAG',
+            alt=True, ctrl=True, shift=False
+        )
+        kmi.properties.camera_mode = 'ORBIT'
+        addon_keymaps.append((km, kmi))
+
+        kmi = km.keymap_items.new(
+            'view3d.sl_camera_modal',
+            type='LEFTMOUSE',
+            value='CLICK',
             alt=True, ctrl=True, shift=False
         )
         kmi.properties.camera_mode = 'ORBIT'
@@ -576,7 +615,16 @@ def register():
         kmi = km.keymap_items.new(
             'view3d.sl_camera_modal',
             type='LEFTMOUSE',
-            value='PRESS',
+            value='CLICK_DRAG',
+            alt=True, ctrl=False, shift=False
+        )
+        kmi.properties.camera_mode = 'FOCUS'
+        addon_keymaps.append((km, kmi))
+
+        kmi = km.keymap_items.new(
+            'view3d.sl_camera_modal',
+            type='LEFTMOUSE',
+            value='CLICK',
             alt=True, ctrl=False, shift=False
         )
         kmi.properties.camera_mode = 'FOCUS'

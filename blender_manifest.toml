@@ -1,6 +1,6 @@
 schema_version = "1.0.0"
 id = "miunau_slcamera"
-version = "1.0.3"
+version = "1.0.4"
 name = "Second Life-style camera"
 tagline = "Second Life-style camera with ALT (option)/CTRL/SHIFT keys"
 maintainer = "miunau"
